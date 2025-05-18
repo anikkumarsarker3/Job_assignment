@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Login</title>
+    <link rel="stylesheet" href="in_out.css">
+</head>
+<body>
+    <div class="login-container">
+        <h2>Log in</h2>
+        <div id="errorMsg" class="error-message"></div>
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" placeholder="Enter your email" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" placeholder="Enter your password" required>
+            </div>
+            <button type="submit" class="submit-btn">Login</button>
+        </form>
+        <div class="login-link">
+            Don't have any account?<a href="sign_up.html">Sign Up</a>
+        </div>
+    </div>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', function(event) {
+      event.preventDefault();
+
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const errorMsg = document.getElementById('errorMsg');
+      
+      // Clear previous error messages
+      errorMsg.textContent = '';
+      
+      // Send request to the backend
+      fetch('/api/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email, password })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          errorMsg.textContent = data.error;
+        } else {
+          // Store user info in localStorage for session management
+          localStorage.setItem('user', JSON.stringify(data.user));
+          // Redirect to chat page
+          window.location.href = 'chat_box.html';
+        }
+      })
+      .catch(error => {
+        errorMsg.textContent = 'An error occurred. Please try again.';
+        console.error('Error:', error);
+      });
+    });
+  </script>
+</body>
+</html>

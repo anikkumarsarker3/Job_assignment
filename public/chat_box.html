@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chat Application</title>
+  <link rel="stylesheet" href="in_out.css">
+  <script src="/socket.io/socket.io.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+</head>
+<body>
+
+<div class="chat-app-container">
+  <!-- User Sidebar -->
+  <div class="users-sidebar">
+    <div class="sidebar-header">
+      <h3>Chat</h3>
+      <div class="sidebar-header-actions">
+        <button id="createGroupBtn" class="create-group-btn" title="Create Group">
+          <i class="fas fa-plus"></i>
+        </button>
+      </div>
+    </div>
+    
+    <div class="tab-nav">
+      <div class="tab-item active" data-tab="users">Users</div>
+      <div class="tab-item" data-tab="groups">Groups</div>
+    </div>
+    
+    <div class="tab-content active" id="users-tab">
+      <div class="search-container">
+        <input type="text" id="userSearch" placeholder="Search users...">
+        <i class="fas fa-search"></i>
+      </div>
+      <div class="users-list" id="usersList">
+        <!-- Users will be populated here -->
+        <div class="loading-users">Loading users...</div>
+      </div>
+    </div>
+    
+    <div class="tab-content" id="groups-tab">
+      <div class="search-container">
+        <input type="text" id="groupSearch" placeholder="Search groups...">
+        <i class="fas fa-search"></i>
+      </div>
+      <button id="createNewGroupBtn" class="create-new-group-btn">
+        <i class="fas fa-plus"></i> Create New Group
+      </button>
+      <div class="groups-list" id="groupsList">
+        <!-- Groups will be populated here -->
+        <div class="loading-users">Loading groups...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat Area -->
+  <div class="chat-container">
+    <div class="chat-header">
+      <div class="chat-header-user">
+        <span id="currentChatUser">Welcome</span>
+        <span id="onlineStatus" class="online-status"></span>
+      </div>
+      <div class="chat-header-actions">
+        <span id="userName"></span>
+        <button id="viewGroupInfoBtn" class="view-members-btn" style="display: none;"><i class="fas fa-users"></i> View Members</button>
+        <button onclick="logout()" class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</button>
+      </div>
+    </div>
+    
+    <div class="chat-messages" id="chatMessages">
+      <div class="message system-message">Select a user or group to start chatting</div>
+    </div>
+
+    <div class="typing-indicator" id="typingIndicator"></div>
+
+    <div class="chat-input">
+      <input type="text" id="messageInput" placeholder="Type your message..." disabled>
+      <button onclick="sendMessage()" id="sendBtn" disabled><i class="fas fa-paper-plane"></i></button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Group Modal -->
+<div class="modal-overlay" id="createGroupModal">
+  <div class="modal-container">
+    <div class="modal-header">
+      <h3>Create Group</h3>
+      <button class="modal-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label for="groupName">Group Name</label>
+        <input type="text" id="groupName" placeholder="Enter group name" required>
+      </div>
+      
+      <div class="form-group">
+        <label>Select Members</label>
+        <div class="user-checkbox-list" id="userCheckboxList">
+          <!-- Users will be populated here -->
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="cancelCreateGroup">Cancel</button>
+      <button class="btn btn-primary" id="confirmCreateGroup">Create Group</button>
+    </div>
+  </div>
+</div>
+
+<!-- Group Info Modal -->
+<div class="modal-overlay" id="groupInfoModal">
+  <div class="modal-container">
+    <div class="modal-header">
+      <h3><span id="groupInfoName"></span> - Group Members</h3>
+      <button class="modal-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="members-label">Group Members <span class="members-count" id="membersCount"></span></label>
+        <div class="members-list" id="groupMembersList">
+          <!-- Members will be populated here -->
+        </div>
+      </div>
+
+      <div class="form-group" id="addMembersSection" style="display: none;">
+        <label>Add New Members</label>
+        <div class="user-checkbox-list" id="addMembersUserList">
+          <!-- Users will be populated here -->
+        </div>
+        <button id="addMembersBtn" class="add-members-btn">
+          <i class="fas fa-user-plus"></i> Add Selected Users
+        </button>
+      </div>
+
+      <div class="group-actions">
+        <button id="showAddMembersBtn" class="add-members-toggle-btn" style="display: none;">
+          <i class="fas fa-user-plus"></i> Add New Members
+        </button>
+        <button id="leaveGroupBtn" class="leave-group-btn">
+          <i class="fas fa-sign-out-alt"></i> Leave Group
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Get user from localStorage
+  let user = null;
+  let socket = null;
+  let currentChatUser = null;
+  let currentChatGroup = null;
+  let onlineUsers = [];
+  let userGroups = [];
+  
+  // Check if user is logged in
+  function checkAuth() {
+    const userStr = localStorage.getItem('user');
+    if (!userStr) {
+      window.location.href = 'log_in.html';
+      return;
+    }
+    
+    user = JSON.parse(userStr);
+    document.getElementById('userName').textContent = user.name;
+    
+    // Initialize Socket.io connection
+    initializeSocketConnection();
+    
+    // Set up tabs
+    setupTabs();
+    
+    // Check if there was a previously selected user or group
+    restoreLastChat();
+  }
+  
+  // Setup tabs
+  function setupTabs() {
+    const tabItems = document.querySelectorAll('.tab-item');
+    const tabContents = document.querySelectorAll('.tab-content');
+    
+    tabItems.forEach(item => {
+      item.addEventListener('click', () => {
+        const tab = item.getAttribute('data-tab');
+        
+        // Remove active class from all tabs
+        tabItems.forEach(t => t.classList.remove('active'));
+        tabContents.forEach(c => c.classList.remove('active'));
+        
+        // Add active class to selected tab
+        item.classList.add('active');
+        document.getElementById(`${tab}-tab`).classList.add('active');
+      });
+    });
+  }
+  
+  // Restore last chat
+  function restoreLastChat() {
+    const lastChatStr = localStorage.getItem('lastChat');
+    if (lastChatStr) {
+      try {
+        const lastChat = JSON.parse(lastChatStr);
+        
+        setTimeout(() => {
+          if (lastChat.type === 'user' && onlineUsers.length > 0) {
+            const userData = onlineUsers.find(u => u.userId == lastChat.id);
+            if (userData) {
+              startChatWith(userData);
+            }
+          } else if (lastChat.type === 'group' && userGroups.length > 0) {
+            const groupData = userGroups.find(g => g.groupId === lastChat.id);
+            if (groupData) {
+              startGroupChat(groupData);
+            }
+          }
+        }, 1000);
+      } catch (e) {
+        console.error('Error parsing last chat', e);
+        localStorage.removeItem('lastChat');
+      }
+    }
+  }
+  
+  // Initialize socket connection
+  function initializeSocketConnection() {
+    socket = io();
+    
+    // Listen for connection
+    socket.on('connect', () => {
+      console.log('Connected to server');
+      
+      // Let the server know who we are
+      socket.emit('user-connected', {
+        userId: user.id,
+        userName: user.name
+      });
+    });
+    
+    // Listen for user list updates
+    socket.on('user-list', (users) => {
+      onlineUsers = users;
+      updateUserList();
+    });
+    
+    // Listen for group list updates
+    socket.on('group-list', (groups) => {
+      userGroups = groups;
+      updateGroupsList();
+    });
+    
+    // Listen for incoming messages
+    socket.on('private-message', (data) => {
+      // If we're currently chatting with this user, display the message
+      if (currentChatUser && currentChatUser.userId === data.fromUserId) {
+        displayMessage(data.message, data.fromUserName);
+      } else {
+        // Show notification for new message
+        showNewMessageNotification(data.fromUserName);
+      }
+    });
+    
+    // Listen for group messages
+    socket.on('group-message', (data) => {
+      // If we're currently in this group chat, display the message
+      if (currentChatGroup && currentChatGroup.groupId === data.groupId) {
+        if (data.isSystem) {
+          displaySystemMessage(data.message);
+        } else if (data.fromUserId !== user.id) {
+          displayMessage(data.message, data.fromUserName);
+        }
+      } else {
+        // Show notification for new group message
+        showNewGroupMessageNotification(data.groupId);
+      }
+    });
+    
+    // Listen for new group creation
+    socket.on('group-created', (data) => {
+      if (data.success) {
+        console.log('Group created:', data.group);
+        
+        // Add to groups list
+        if (!userGroups.some(g => g.groupId === data.group.groupId)) {
+          userGroups.push(data.group);
+          updateGroupsList();
+        }
+        
+        // Close the modal
+        document.getElementById('createGroupModal').classList.remove('active');
+        
+        // Switch to the groups tab
+        document.querySelector('.tab-item[data-tab="groups"]').click();
+        
+        // Start chat with the new group
+        startGroupChat(data.group);
+      } else {
+        alert('Failed to create group: ' + data.error);
+      }
+    });
+    
+    // Listen for group leave result
+    socket.on('leave-group-result', (data) => {
+      if (data.success) {
+        // Remove the group from the list
+        userGroups = userGroups.filter(g => g.groupId !== data.groupId);
+        updateGroupsList();
+        
+        // Close the modal
+        document.getElementById('groupInfoModal').classList.remove('active');
+        
+        // If current chat is this group, reset
+        if (currentChatGroup && currentChatGroup.groupId === data.groupId) {
+          resetChat();
+        }
+      }
+    });
+    
+    // Listen for member removed from group
+    socket.on('member-removed', (data) => {
+      // If we're the one removed, show notification and update groups list
+      if (data.userId == user.id) {
+        alert(`You have been removed from the group "${data.groupName}"`);
+        
+        // Remove the group from the list
+        userGroups = userGroups.filter(g => g.groupId !== data.groupId);
+        updateGroupsList();
+        
+        // If current chat is this group, reset
+        if (currentChatGroup && currentChatGroup.groupId === data.groupId) {
+          resetChat();
+        }
+      } 
+      // If we're viewing the group info, refresh the members list
+      else if (currentChatGroup && currentChatGroup.groupId === data.groupId) {
+        fetchGroupMembers(data.groupId);
+        
+        // Show system message
+        displaySystemMessage(`${data.userName} has been removed from the group`);
+      }
+    });
+    
+    // Listen for members added to group
+    socket.on('members-added', (data) => {
+      // If we're viewing the group info, refresh the members list
+      if (currentChatGroup && currentChatGroup.groupId === data.groupId) {
+        fetchGroupMembers(data.groupId);
+        
+        // Show system message for each added user
+        data.addedUsers.forEach(addedUser => {
+          displaySystemMessage(`${addedUser.userName} has been added to the group`);
+        });
+      }
+    });
+    
+    // Listen for typing indicators
+    socket.on('typing', (data) => {
+      const typingIndicator = document.getElementById('typingIndicator');
+      if (currentChatUser && data.userId === currentChatUser.userId && data.isTyping) {
+        typingIndicator.textContent = `${data.userName} is typing...`;
+      } else {
+        typingIndicator.textContent = '';
+      }
+    });
+    
+    // Listen for user status change
+    socket.on('user-status-change', (userData) => {
+      // Update user status in the list
+      const userIndex = onlineUsers.findIndex(u => u.userId === userData.userId);
+      if (userIndex !== -1) {
+        onlineUsers[userIndex].online = userData.online;
+        updateUserList();
+      }
+      
+      // If this is the current chat user, update their status
+      if (currentChatUser && currentChatUser.userId === userData.userId) {
+        updateCurrentChatHeader();
+      }
+    });
+    
+    // Listen for disconnection
+    socket.on('disconnect', () => {
+      console.log('Disconnected from server');
+      displayMessage('Disconnected from server. Reconnecting...', 'System');
+    });
+  }
+  
+  // Update the user list in the sidebar
+  function updateUserList() {
+    const usersList = document.getElementById('usersList');
+    usersList.innerHTML = '';
+    
+    if (onlineUsers.length === 0) {
+      usersList.innerHTML = '<div class="no-users">No other users online</div>';
+      return;
+    }
+    
+    onlineUsers.forEach(userData => {
+      // Don't show current user in the list
+      if (userData.userId === user.id) {
+        return;
+      }
+      
+      const userElement = document.createElement('div');
+      userElement.className = 'user-item';
+      userElement.dataset.userId = userData.userId;
+      userElement.dataset.userName = userData.userName;
+      
+      const statusClass = userData.online ? 'online' : 'offline';
+      
+      userElement.innerHTML = `
+        <div class="user-avatar">
+          <span>${userData.userName.charAt(0).toUpperCase()}</span>
+        </div>
+        <div class="user-info">
+          <div class="user-name">${userData.userName}</div>
+          <div class="user-status ${statusClass}">${userData.online ? 'Online' : 'Offline'}</div>
+        </div>
+        <div class="new-message-badge" id="badge-${userData.userId}"></div>
+      `;
+      
+      userElement.addEventListener('click', () => {
+        startChatWith(userData);
+      });
+      
+      usersList.appendChild(userElement);
+    });
+    
+    // Also populate the user checkbox list for creating groups
+    populateUserCheckboxList();
+  }
+  
+  // Update the groups list in the sidebar
+  function updateGroupsList() {
+    const groupsList = document.getElementById('groupsList');
+    groupsList.innerHTML = '';
+    
+    if (userGroups.length === 0) {
+      groupsList.innerHTML = '<div class="no-users">No groups yet</div>';
+      return;
+    }
+    
+    userGroups.forEach(groupData => {
+      const groupElement = document.createElement('div');
+      groupElement.className = 'group-item';
+      groupElement.dataset.groupId = groupData.groupId;
+      groupElement.dataset.groupName = groupData.name;
+      
+      groupElement.innerHTML = `
+        <div class="group-avatar">
+          <span>${groupData.name.charAt(0).toUpperCase()}</span>
+        </div>
+        <div class="group-info">
+          <div class="group-name">${groupData.name}</div>
+          <div class="group-details">${groupData.member_count || ''} members</div>
+        </div>
+        <div class="new-group-badge" id="group-badge-${groupData.groupId}"></div>
+      `;
+      
+      groupElement.addEventListener('click', () => {
+        startGroupChat(groupData);
+      });
+      
+      groupsList.appendChild(groupElement);
+    });
+  }
+  
+  // Populate the user checkbox list for creating groups
+  function populateUserCheckboxList() {
+    const userCheckboxList = document.getElementById('userCheckboxList');
+    userCheckboxList.innerHTML = '';
+    
+    onlineUsers.forEach(userData => {
+      // Don't include current user
+      if (userData.userId === user.id) {
+        return;
+      }
+      
+      const userCheckboxItem = document.createElement('div');
+      userCheckboxItem.className = 'user-checkbox-item';
+      
+      userCheckboxItem.innerHTML = `
+        <input type="checkbox" id="user-${userData.userId}" value="${userData.userId}">
+        <label for="user-${userData.userId}">${userData.userName}</label>
+      `;
+      
+      userCheckboxList.appendChild(userCheckboxItem);
+    });
+  }
+  
+  // Start a chat with a specific user
+  function startChatWith(userData) {
+    // Reset any group chat
+    currentChatGroup = null;
+    
+    // Clear any notification for this user
+    clearNewMessageNotification(userData.userId);
+    
+    // Set current chat user
+    currentChatUser = userData;
+    
+    // Save the selected chat to localStorage
+    localStorage.setItem('lastChat', JSON.stringify({
+      type: 'user',
+      id: userData.userId
+    }));
+    
+    // Update UI
+    updateCurrentChatHeader();
+    
+    // Hide group info button
+    document.getElementById('viewGroupInfoBtn').style.display = 'none';
+    
+    // Clear the chat messages
+    const chatMessages = document.getElementById('chatMessages');
+    chatMessages.innerHTML = '';
+    
+    // Add a system message
+    const systemMessage = document.createElement('div');
+    systemMessage.className = 'message system-message';
+    systemMessage.textContent = `Loading conversation with ${userData.userName}...`;
+    chatMessages.appendChild(systemMessage);
+    
+    // Enable input
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    messageInput.disabled = false;
+    sendBtn.disabled = false;
+    messageInput.focus();
+    
+    // Fetch chat history
+    fetchChatHistory(userData.userId);
+  }
+  
+  // Start a chat with a group
+  function startGroupChat(groupData) {
+    // Reset any user chat
+    currentChatUser = null;
+    
+    // Clear any notification for this group
+    clearNewGroupMessageNotification(groupData.groupId);
+    
+    // Set current chat group
+    currentChatGroup = groupData;
+    
+    // Save the selected chat to localStorage
+    localStorage.setItem('lastChat', JSON.stringify({
+      type: 'group',
+      id: groupData.groupId
+    }));
+    
+    // Update UI
+    updateCurrentChatHeader();
+    
+    // Show group info button
+    document.getElementById('viewGroupInfoBtn').style.display = 'inline-block';
+    
+    // Clear the chat messages
+    const chatMessages = document.getElementById('chatMessages');
+    chatMessages.innerHTML = '';
+    
+    // Add a system message
+    const systemMessage = document.createElement('div');
+    systemMessage.className = 'message system-message';
+    systemMessage.textContent = `Loading group conversation...`;
+    chatMessages.appendChild(systemMessage);
+    
+    // Enable input
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    messageInput.disabled = false;
+    sendBtn.disabled = false;
+    messageInput.focus();
+    
+    // Fetch group chat history
+    fetchGroupChatHistory(groupData.groupId);
+  }
+  
+  // Update the current chat header
+  function updateCurrentChatHeader() {
+    const currentChatUserElement = document.getElementById('currentChatUser');
+    const onlineStatusElement = document.getElementById('onlineStatus');
+    
+    if (currentChatUser) {
+      currentChatUserElement.textContent = currentChatUser.userName;
+      
+      if (currentChatUser.online) {
+        onlineStatusElement.className = 'online-status online';
+        onlineStatusElement.setAttribute('title', 'Online');
+      } else {
+        onlineStatusElement.className = 'online-status offline';
+        onlineStatusElement.setAttribute('title', 'Offline');
+      }
+    } else if (currentChatGroup) {
+      currentChatUserElement.textContent = currentChatGroup.name;
+      onlineStatusElement.className = 'online-status hidden';
+    } else {
+      currentChatUserElement.textContent = 'Welcome';
+      onlineStatusElement.className = 'online-status hidden';
+    }
+  }
+  
+  // Reset the chat
+  function resetChat() {
+    currentChatUser = null;
+    currentChatGroup = null;
+    
+    const chatMessages = document.getElementById('chatMessages');
+    chatMessages.innerHTML = '<div class="message system-message">Select a user or group to start chatting</div>';
+    
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    messageInput.disabled = true;
+    sendBtn.disabled = true;
+    
+    updateCurrentChatHeader();
+    
+    // Hide group info button
+    document.getElementById('viewGroupInfoBtn').style.display = 'none';
+  }
+  
+  // Fetch chat history with the selected user
+  function fetchChatHistory(otherUserId) {
+    const chatMessages = document.getElementById('chatMessages');
+    
+    // Show loading indicator
+    chatMessages.innerHTML = '<div class="message system-message">Loading messages...</div>';
+    
+    fetch(`/api/messages/${user.id}/${otherUserId}`)
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP error ${response.status}`);
+        }
+        return response.json();
+      })
+      .then(data => {
+        // Clear loading message
+        chatMessages.innerHTML = '';
+        
+        if (!data.messages || data.messages.length === 0) {
+          // No messages yet
+          const systemMessage = document.createElement('div');
+          systemMessage.className = 'message system-message';
+          systemMessage.textContent = `Start of your conversation with ${currentChatUser.userName}`;
+          chatMessages.appendChild(systemMessage);
+          return;
+        }
+        
+        // Display messages
+        data.messages.forEach(msg => {
+          const isMine = msg.user_id == user.id;
+          displayHistoryMessage(msg.content, isMine ? null : msg.user_name, msg.created_at);
+        });
+        
+        // Update last message timestamp locally
+        updateLastMessageTimestamp(otherUserId);
+        
+        // Scroll to bottom
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      })
+      .catch(error => {
+        console.error('Error fetching chat history:', error);
+        
+        // Clear previous messages
+        chatMessages.innerHTML = '';
+        
+        // Show error message
+        const systemMessage = document.createElement('div');
+        systemMessage.className = 'message system-message';
+        systemMessage.textContent = `Error loading chat history. Start of your conversation with ${currentChatUser.userName}`;
+        chatMessages.appendChild(systemMessage);
+      });
+  }
+  
+  // Fetch group chat history
+  function fetchGroupChatHistory(groupId) {
+    const chatMessages = document.getElementById('chatMessages');
+    
+    // Show loading indicator
+    chatMessages.innerHTML = '<div class="message system-message">Loading messages...</div>';
+    
+    fetch(`/api/groups/${groupId}/messages`)
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP error ${response.status}`);
+        }
+        return response.json();
+      })
+      .then(data => {
+        // Clear loading message
+        chatMessages.innerHTML = '';
+        
+        if (!data.messages || data.messages.length === 0) {
+          // No messages yet
+          const systemMessage = document.createElement('div');
+          systemMessage.className = 'message system-message';
+          systemMessage.textContent = `Start of group conversation`;
+          chatMessages.appendChild(systemMessage);
+          return;
+        }
+        
+        // Display messages
+        data.messages.forEach(msg => {
+          const isMine = msg.user_id == user.id;
+          displayHistoryMessage(msg.content, isMine ? null : msg.user_name, msg.created_at);
+        });
+        
+        // Scroll to bottom
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      })
+      .catch(error => {
+        console.error('Error fetching group messages:', error);
+        
+        // Clear previous messages
+        chatMessages.innerHTML = '';
+        
+        // Show error message
+        const systemMessage = document.createElement('div');
+        systemMessage.className = 'message system-message';
+        systemMessage.textContent = `Error loading group chat history.`;
+        chatMessages.appendChild(systemMessage);
+      });
+  }
+  
+  // Display message from history
+  function displayHistoryMessage(message, sender = null, timestamp = null) {
+    const chatBox = document.getElementById('chatMessages');
+    const messageElement = document.createElement('div');
+    
+    if (sender) {
+      // Message from others
+      messageElement.className = 'message received-message';
+      
+      const messageContent = document.createElement('div');
+      messageContent.className = 'message-content';
+      
+      let timestampStr = '';
+      if (timestamp) {
+        const date = new Date(timestamp);
+        timestampStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      
+      messageContent.innerHTML = `
+        <div class="message-sender">${sender} ${timestampStr ? `<span class="message-time">${timestampStr}</span>` : ''}</div>
+        <div class="message-text">${message}</div>
+      `;
+      
+      messageElement.appendChild(messageContent);
+    } else {
+      // My message
+      messageElement.className = 'message sent-message';
+      
+      if (timestamp) {
+        const date = new Date(timestamp);
+        const timestampStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        const messageContent = document.createElement('div');
+        messageContent.className = 'message-content';
+        messageContent.innerHTML = `
+          <div class="message-text">${message}</div>
+          <div class="message-time">${timestampStr}</div>
+        `;
+        messageElement.appendChild(messageContent);
+      } else {
+        messageElement.textContent = message;
+      }
+    }
+    
+    chatBox.appendChild(messageElement);
+  }
+  
+  // Update last message timestamp
+  function updateLastMessageTimestamp(userId) {
+    try {
+      const chatData = JSON.parse(localStorage.getItem('chatData') || '{}');
+      chatData[userId] = {
+        lastMessageTime: new Date().toISOString(),
+        unreadCount: 0 // Reset unread count for this chat
+      };
+      localStorage.setItem('chatData', JSON.stringify(chatData));
+    } catch (e) {
+      console.error('Error updating chat data', e);
+    }
+  }
+  
+  // Display message in chat
+  function displayMessage(message, sender = null) {
+    const chatBox = document.getElementById('chatMessages');
+    const messageElement = document.createElement('div');
+    messageElement.className = 'message';
+    
+    if (sender) {
+      // Message from others
+      messageElement.className = 'message received-message';
+      
+      const messageContent = document.createElement('div');
+      messageContent.className = 'message-content';
+      messageContent.innerHTML = `
+        <div class="message-sender">${sender}</div>
+        <div class="message-text">${message}</div>
+      `;
+      
+      messageElement.appendChild(messageContent);
+    } else if (sender === 'System') {
+      // System message
+      messageElement.className = 'message system-message';
+      messageElement.textContent = message;
+    } else {
+      // My message
+      messageElement.className = 'message sent-message';
+      messageElement.textContent = message;
+    }
+    
+    chatBox.appendChild(messageElement);
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }
+  
+  // Display a system message
+  function displaySystemMessage(message) {
+    const chatBox = document.getElementById('chatMessages');
+    const messageElement = document.createElement('div');
+    messageElement.className = 'message system-message';
+    messageElement.textContent = message;
+    chatBox.appendChild(messageElement);
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }
+  
+  // Handle sending messages
+  function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const messageText = input.value.trim();
+    
+    if (messageText === '' || !socket) return;
+    
+    if (currentChatUser) {
+      // Send private message
+      socket.emit('private-message', {
+        fromUserId: user.id,
+        fromUserName: user.name,
+        toUserId: currentChatUser.userId,
+        message: messageText
+      });
+      
+      // Display sent message in our chat
+      displayMessage(messageText);
+    } else if (currentChatGroup) {
+      // Send group message
+      socket.emit('group-message', {
+        groupId: currentChatGroup.groupId,
+        message: messageText
+      });
+      
+      // Display sent message in our chat
+      displayMessage(messageText);
+    }
+    
+    // Clear input
+    input.value = '';
+  }
+  
+  // Show notification for new message
+  function showNewMessageNotification(fromUserName) {
+    const userData = onlineUsers.find(u => u.userName === fromUserName);
+    if (!userData) return;
+    
+    const badge = document.getElementById(`badge-${userData.userId}`);
+    if (badge) {
+      if (badge.hasAttribute('data-count')) {
+        const count = parseInt(badge.getAttribute('data-count')) + 1;
+        badge.setAttribute('data-count', count);
+        badge.textContent = count;
+      } else {
+        badge.setAttribute('data-count', 1);
+        badge.textContent = 1;
+        badge.classList.add('active');
+      }
+    }
+  }
+  
+  // Clear notification for new message
+  function clearNewMessageNotification(userId) {
+    const badge = document.getElementById(`badge-${userId}`);
+    if (badge) {
+      badge.removeAttribute('data-count');
+      badge.textContent = '';
+      badge.classList.remove('active');
+    }
+  }
+  
+  // Show notification for new group message
+  function showNewGroupMessageNotification(groupId) {
+    const badge = document.getElementById(`group-badge-${groupId}`);
+    if (badge) {
+      if (badge.hasAttribute('data-count')) {
+        const count = parseInt(badge.getAttribute('data-count')) + 1;
+        badge.setAttribute('data-count', count);
+        badge.textContent = count;
+      } else {
+        badge.setAttribute('data-count', 1);
+        badge.textContent = 1;
+        badge.classList.add('active');
+      }
+    }
+  }
+  
+  // Clear notification for new group message
+  function clearNewGroupMessageNotification(groupId) {
+    const badge = document.getElementById(`group-badge-${groupId}`);
+    if (badge) {
+      badge.removeAttribute('data-count');
+      badge.textContent = '';
+      badge.classList.remove('active');
+    }
+  }
+  
+  // Create group modal handling
+  document.getElementById('createGroupBtn').addEventListener('click', () => {
+    // Populate user list
+    populateUserCheckboxList();
+    
+    // Show modal
+    document.getElementById('createGroupModal').classList.add('active');
+    
+    // Clear form
+    document.getElementById('groupName').value = '';
+  });
+  
+  // Close modals on X button click
+  document.querySelectorAll('.modal-close').forEach(button => {
+    button.addEventListener('click', () => {
+      document.querySelectorAll('.modal-overlay').forEach(modal => {
+        modal.classList.remove('active');
+      });
+    });
+  });
+  
+  // Cancel group creation
+  document.getElementById('cancelCreateGroup').addEventListener('click', () => {
+    document.getElementById('createGroupModal').classList.remove('active');
+  });
+  
+  // Confirm group creation
+  document.getElementById('confirmCreateGroup').addEventListener('click', () => {
+    const groupName = document.getElementById('groupName').value.trim();
+    if (!groupName) {
+      alert('Please enter a group name');
+      return;
+    }
+    
+    // Get selected users
+    const selectedUsers = [];
+    document.querySelectorAll('#userCheckboxList input[type="checkbox"]:checked').forEach(checkbox => {
+      selectedUsers.push(parseInt(checkbox.value));
+    });
+    
+    if (selectedUsers.length === 0) {
+      alert('Please select at least one user');
+      return;
+    }
+    
+    // Create the group
+    socket.emit('create-group', {
+      groupName: groupName,
+      memberIds: selectedUsers
+    });
+  });
+  
+  // View group members button
+  document.getElementById('viewGroupInfoBtn').addEventListener('click', () => {
+    if (!currentChatGroup) return;
+    
+    // Set group name in modal
+    document.getElementById('groupInfoName').textContent = currentChatGroup.name;
+    
+    // Fetch group members
+    fetchGroupMembers(currentChatGroup.groupId);
+    
+    // Show modal with a fade-in effect
+    const modal = document.getElementById('groupInfoModal');
+    modal.classList.add('active');
+    
+    // Focus on the modal to improve accessibility
+    setTimeout(() => {
+      modal.querySelector('.modal-close').focus();
+    }, 100);
+  });
+  
+  // Show add members section
+  document.getElementById('showAddMembersBtn').addEventListener('click', function() {
+    const addMembersSection = document.getElementById('addMembersSection');
+    
+    if (addMembersSection.style.display === 'none') {
+      // Show the section
+      addMembersSection.style.display = 'block';
+      this.innerHTML = '<i class="fas fa-times"></i> Cancel Adding Members';
+      
+      // Populate the list of users to add
+      if (currentChatGroup) {
+        populateAddMembersList(currentChatGroup.groupId);
+      }
+    } else {
+      // Hide the section
+      addMembersSection.style.display = 'none';
+      this.innerHTML = '<i class="fas fa-user-plus"></i> Add New Members';
+    }
+  });
+  
+  // Add selected members to the group
+  document.getElementById('addMembersBtn').addEventListener('click', function() {
+    if (!currentChatGroup) return;
+    
+    // Get selected users
+    const selectedUsers = [];
+    document.querySelectorAll('#addMembersUserList input[type="checkbox"]:checked').forEach(checkbox => {
+      selectedUsers.push(parseInt(checkbox.value));
+    });
+    
+    if (selectedUsers.length === 0) {
+      alert('Please select at least one user to add');
+      return;
+    }
+    
+    // Send the add members event
+    socket.emit('add-group-members', {
+      groupId: currentChatGroup.groupId,
+      userIds: selectedUsers
+    });
+    
+    // Hide the add members section
+    document.getElementById('addMembersSection').style.display = 'none';
+    document.getElementById('showAddMembersBtn').innerHTML = '<i class="fas fa-user-plus"></i> Add New Members';
+  });
+  
+  // Leave group button
+  document.getElementById('leaveGroupBtn').addEventListener('click', () => {
+    if (!currentChatGroup) return;
+    
+    if (confirm(`Are you sure you want to leave the group "${currentChatGroup.name}"?`)) {
+      socket.emit('leave-group', {
+        groupId: currentChatGroup.groupId
+      });
+    }
+  });
+  
+  // Fetch group members
+  function fetchGroupMembers(groupId) {
+    const membersList = document.getElementById('groupMembersList');
+    const membersCount = document.getElementById('membersCount');
+    const addMembersSection = document.getElementById('addMembersSection');
+    const showAddMembersBtn = document.getElementById('showAddMembersBtn');
+    
+    membersList.innerHTML = '<div class="loading-users">Loading members...</div>';
+    membersCount.textContent = '';
+    
+    // Hide add members section by default
+    addMembersSection.style.display = 'none';
+    showAddMembersBtn.style.display = 'none';
+    
+    fetch(`/api/groups/${groupId}`)
+      .then(response => response.json())
+      .then(data => {
+        membersList.innerHTML = '';
+        
+        if (!data.members || data.members.length === 0) {
+          membersList.innerHTML = '<div class="no-users">No members found</div>';
+          membersCount.textContent = '(0)';
+          return;
+        }
+        
+        // Update members count
+        membersCount.textContent = `(${data.members.length})`;
+        
+        // Check if current user is the creator
+        const isCreator = data.group.creator_id == user.id;
+        
+        // If current user is creator, show the add members button
+        if (isCreator) {
+          showAddMembersBtn.style.display = 'flex';
+        }
+        
+        // Sort members - creator first, then current user, then others alphabetically
+        const sortedMembers = [...data.members].sort((a, b) => {
+          const aIsCreator = a.user_id == data.group.creator_id;
+          const bIsCreator = b.user_id == data.group.creator_id;
+          
+          if (aIsCreator && !bIsCreator) return -1;
+          if (!aIsCreator && bIsCreator) return 1;
+          
+          const aIsCurrentUser = a.user_id == user.id;
+          const bIsCurrentUser = b.user_id == user.id;
+          
+          if (aIsCurrentUser && !bIsCurrentUser) return -1;
+          if (!aIsCurrentUser && bIsCurrentUser) return 1;
+          
+          return a.user_name.localeCompare(b.user_name);
+        });
+        
+        sortedMembers.forEach(member => {
+          const memberItem = document.createElement('div');
+          memberItem.className = 'member-item';
+          
+          const isCreatorMember = member.user_id == data.group.creator_id;
+          const isCurrentUser = member.user_id == user.id;
+          // Check if user is online by checking if they exist in the onlineUsers array
+          const isOnline = onlineUsers.some(u => u.userId == member.user_id && u.online);
+          const status = isOnline ? 'online' : 'offline';
+          
+          // Create member HTML
+          let memberHTML = `
+            <div class="member-avatar">
+              <span>${member.user_name.charAt(0).toUpperCase()}</span>
+            </div>
+            <div class="member-name">
+              ${member.user_name} ${isCurrentUser ? '(You)' : ''}
+              <span class="member-status ${status}">${status}</span>
+            </div>
+            ${isCreatorMember ? '<span class="creator-badge">Creator</span>' : ''}
+          `;
+          
+          // Add remove button if current user is creator and member is not creator
+          if (isCreator && !isCreatorMember && !isCurrentUser) {
+            memberHTML += `
+              <button class="remove-member-btn" title="Remove from group" data-user-id="${member.user_id}">
+                <i class="fas fa-times"></i>
+              </button>
+            `;
+          }
+          
+          memberItem.innerHTML = memberHTML;
+          
+          // Add click event to remove button if present
+          const removeBtn = memberItem.querySelector('.remove-member-btn');
+          if (removeBtn) {
+            removeBtn.addEventListener('click', (e) => {
+              e.stopPropagation(); // Prevent bubbling
+              removeMemberFromGroup(groupId, member.user_id, member.user_name);
+            });
+          }
+          
+          membersList.appendChild(memberItem);
+        });
+      })
+      .catch(error => {
+        console.error('Error fetching group members:', error);
+        membersList.innerHTML = '<div class="error">Error loading members</div>';
+        membersCount.textContent = '';
+      });
+  }
+  
+  // Function to remove a member from the group
+  function removeMemberFromGroup(groupId, userId, userName) {
+    if (confirm(`Are you sure you want to remove ${userName} from the group?`)) {
+      // Send socket event to remove member
+      socket.emit('remove-group-member', {
+        groupId: groupId,
+        userId: userId
+      });
+    }
+  }
+  
+  // Function to populate the list of users to add to a group
+  function populateAddMembersList(groupId) {
+    const userList = document.getElementById('addMembersUserList');
+    userList.innerHTML = '<div class="loading-users">Loading users...</div>';
+    
+    // First, get all users
+    const allUsers = [...onlineUsers]; 
+    
+    // Then get current group members
+    fetch(`/api/groups/${groupId}`)
+      .then(response => response.json())
+      .then(data => {
+        // Filter out users that are already in the group
+        const memberIds = data.members.map(m => m.user_id);
+        const availableUsers = allUsers.filter(u => !memberIds.includes(parseInt(u.userId)));
+        
+        userList.innerHTML = '';
+        
+        if (availableUsers.length === 0) {
+          userList.innerHTML = '<div class="no-users">No more users to add</div>';
+          return;
+        }
+        
+        availableUsers.forEach(userData => {
+          const userCheckboxItem = document.createElement('div');
+          userCheckboxItem.className = 'user-checkbox-item';
+          
+          userCheckboxItem.innerHTML = `
+            <input type="checkbox" id="add-user-${userData.userId}" value="${userData.userId}">
+            <label for="add-user-${userData.userId}">
+              ${userData.userName} 
+              <span class="member-status ${userData.online ? 'online' : 'offline'}">
+                ${userData.online ? 'online' : 'offline'}
+              </span>
+            </label>
+          `;
+          
+          userList.appendChild(userCheckboxItem);
+        });
+      })
+      .catch(error => {
+        console.error('Error fetching users to add:', error);
+        userList.innerHTML = '<div class="error">Error loading users</div>';
+      });
+  }
+  
+  // Handle user search
+  document.getElementById('userSearch').addEventListener('input', function(e) {
+    const searchTerm = e.target.value.toLowerCase();
+    const userItems = document.querySelectorAll('.user-item');
+    
+    userItems.forEach(item => {
+      const userName = item.dataset.userName.toLowerCase();
+      if (userName.includes(searchTerm)) {
+        item.style.display = 'flex';
+      } else {
+        item.style.display = 'none';
+      }
+    });
+  });
+  
+  // Handle group search
+  document.getElementById('groupSearch').addEventListener('input', function(e) {
+    const searchTerm = e.target.value.toLowerCase();
+    const groupItems = document.querySelectorAll('.group-item');
+    
+    groupItems.forEach(item => {
+      const groupName = item.dataset.groupName.toLowerCase();
+      if (groupName.includes(searchTerm)) {
+        item.style.display = 'flex';
+      } else {
+        item.style.display = 'none';
+      }
+    });
+  });
+  
+  // Handle Create New Group button 
+  document.getElementById('createNewGroupBtn').addEventListener('click', function() {
+    // Populate user list for group creation
+    populateUserCheckboxList();
+    
+    // Show the create group modal
+    document.getElementById('createGroupModal').classList.add('active');
+    
+    // Clear form
+    document.getElementById('groupName').value = '';
+  });
+  
+  // Handle input events for typing indicator
+  document.getElementById('messageInput').addEventListener('input', function() {
+    if (socket) {
+      if (currentChatUser) {
+        // Private chat typing indicator
+        socket.emit('typing', {
+          userId: user.id,
+          userName: user.name,
+          toUserId: currentChatUser.userId,
+          isTyping: this.value.trim().length > 0
+        });
+      } else if (currentChatGroup) {
+        // Group chat typing indicator - if implemented on server
+        socket.emit('typing', {
+          userId: user.id,
+          userName: user.name,
+          groupId: currentChatGroup.groupId,
+          isTyping: this.value.trim().length > 0
+        });
+      }
+    }
+  });
+  
+  // Handle pressing Enter to send
+  document.getElementById('messageInput').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+      sendMessage();
+    }
+  });
+
+  function logout() {
+    // Call the logout API
+    fetch('/api/logout')
+      .then(response => response.json())
+      .then(data => {
+        // Clear localStorage
+        localStorage.removeItem('user');
+        localStorage.removeItem('lastChat');
+        // Redirect to login page
+        window.location.href = 'log_in.html';
+      })
+      .catch(error => {
+        console.error('Error logging out:', error);
+        // Even if the API call fails, log the user out locally
+        localStorage.removeItem('user');
+        localStorage.removeItem('lastChat');
+        window.location.href = 'log_in.html';
+      });
+  }
+  
+  // Check authentication on page load
+  window.onload = checkAuth;
+</script>
+
+</body>
+</html>
